@@ -41,10 +41,8 @@ if __name__ == '__main__':
 		video_src = 0
 	args = dict(args)
 	cascade_fn = args.get('--cascade', "car_cascade.xml")
-	#nested_fn  = args.get('--nested-cascade', "../../data/haarcascades/haarcascade_eye.xml")
 	
 	cascade = cv2.CascadeClassifier(cascade_fn)
-	#nested = cv2.CascadeClassifier(nested_fn)
 	cam = cv2.VideoCapture("rtsp://admin:admin@172.16.20.20:554/snl/live/1/1")
 	i = 0
 	while True:
@@ -56,12 +54,6 @@ if __name__ == '__main__':
 		#print (str(len(rects)))
 		vis = img.copy()
 		draw_rects(vis, rects, (0, 255, 0))
-		#if not nested.empty():
-		#	for x1, y1, x2, y2 in rects:
-		#		roi = gray[y1:y2, x1:x2]
-		#		vis_roi = vis[y1:y2, x1:x2]
-		#		#subrects = detect(roi.copy(), nested)
-		#		draw_rects(vis_roi, subrects, (255, 0, 0))
 		dt = clock() - t
 	
 		draw_str(vis, (20, 20), 'time: %.1f ms' % (dt*1000))
@@ -69,7 +61,6 @@ if __name__ == '__main__':
 		if (len(rects)) > 0 :
 			cv2.imwrite(str(i) + 'image.jpg',vis)
 			i+=1
-		#cv2.imshow('facedetect', vis)
 		if cv2.waitKey(5) == 27:
 			break
 		cv2.destroyAllWindows()
