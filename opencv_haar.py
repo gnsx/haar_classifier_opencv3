@@ -23,7 +23,7 @@ from common import clock, draw_str
 
 
 def detect(img, cascade):
-    rects = cascade.detectMultiScale(img, scaleFactor=4.0, minNeighbors=8, minSize=(48, 48),
+    rects = cascade.detectMultiScale(img, scaleFactor=8.0, minNeighbors=6, minSize=(48,48),
                                      flags=cv2.CASCADE_SCALE_IMAGE)
     if len(rects) == 0:
         return []
@@ -41,14 +41,20 @@ headers = {'content-type': content_type}
 def push_to_cloud():
 	print ("Entered Queue")
 	while kill_timer:
-		print ("Size of Queue : " + str(q.qsize()))
+		print ("Queue is Empty")
 		while not q.empty():
 			temp_img = q.get()
-			_, img_encoded = cv2.imencode('.jpg', temp_img)
-			response = requests.post("http://172.16.0.109:2777/toll/rek", data=img_encoded.tostring(), headers=headers)
-			print ("sent data out data")
-			print (response)
-		time.sleep(1)
+			print ("....ALERT ! Pulled from Queue...")
+			print ("Queue not empty " + str(q.qsize()))
+			try:
+				_, img_encoded = cv2.imencode('.jpg', temp_img)
+				response = requests.put("http://172.16.0.109:2777/toll/rek", data=img_encoded.tostring(), headers=headers)
+				print ("REQUESTED SUBMITTED")
+				print (response)
+			except:
+				print ("API Cholna..retrying in 5 seconds")
+				time.sleep(5)
+		time.sleep(5)
 	print ("Exiting push_to_cloud_thread")
 	return
 		
@@ -64,17 +70,16 @@ def main():
 	except:
 		video_src = 0
 	args = dict(args)
-	cascade_fn = args.get('--cascade', "car_cascade.xml")
-		
+	cascade_fn = args.get('--cascade', "cascade.xml")
 	cascade = cv2.CascadeClassifier(cascade_fn)
 	while kill_timer:
 		print ("Opening Stream from rtsp")
 		cam = cv2.VideoCapture("rtsp://admin:admin@172.16.20.20:554/snl/live/1/1")
-		i = 0
+		#i = 0
 		do_loop = True
 		while do_loop and kill_timer:
-			ret, img = cam.read()
 			try:
+				ret, img = cam.read()
 				gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 				gray = cv2.equalizeHist(gray)
 				t = clock()
@@ -84,35 +89,39 @@ def main():
 				draw_rects(vis, rects, (0, 255, 0))
 				dt = clock() - t
 				draw_str(vis, (20, 20), 'time: %.1f ms' % (dt*1000))
-				#print (str(1/dt) + ' ' + str(i) + 'box')
+				print (str(1/dt) + "fps")
 				if (len(rects)) > 0 :
-					cv2.imwrite(str(i) + 'image.jpg',img)
-					q.put(img)
-					i+=1
+					#cv2.imwrite(str(i) + 'image.jpg',img)
+					#q.put(img)
+					print (str(len(rects)) + "	Added to Queue")
+					#i+=1
 				#cv2.imshow('facedetect', vis)
 				if cv2.waitKey(5) == 27:
 					break
 			except:
 				do_loop = False
-				cv2.destroyAllWindows()
+				#cv2.destroyAllWindows()
 				cam = None
-				print ("Error")
-				
-	cv2.destroyAllWindows()
+				print ("...	...	...	...	Error Going to Open Stream Again")
+	#cv2.destroyAllWindows()
 	print ("Out of here")
 		
 if __name__ == '__main__':
 	
 	kill_timer = True
-	t1 = threading.Thread(target=push_to_cloud)
+	#t1 = threading.Thread(target=push_to_cloud)
 	t2 = threading.Thread(target=main)
-	t1.start()
+	#t1.start()
 	t2.start()
 	try:
 		while True:
-			time.sleep(.1)
+			time.sleep(1/1000000)
 	except KeyboardInterrupt:
 		print ("attempting to close threads.")
 		kill_timer = False
         
-        print ("threads successfully closed")
+        print ("All threads close submitted")
+
+	
+
+
