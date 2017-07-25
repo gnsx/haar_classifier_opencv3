@@ -1,29 +1,78 @@
 #!/usr/bin/env python
 
 '''
-face detection using haar cascades
+Face detection using haar cascades
+Reading video from FFMPEG using subprocess basedon Emanuele Ruffaldi
 
-USAGE:
-    facedetect.py [--cascade <cascade_fn>] [--nested-cascade <cascade_fn>] [<video_source>]
 '''
 
 # Python 2/3 compatibility
 from __future__ import print_function
 
 import time
+import os
 import Queue
+import subprocess
 import threading
 import requests
 import numpy as np
 import cv2
+from time import ctime
 
 # local modules
 from video import create_capture
 from common import clock, draw_str
 
+# ffmpeg piping thread
+class FFmpegVideoCapture:
+    # mode=gray,yuv420p,rgb24,bgr24
+    def __init__(self,source,width,height,mode="gray",start_seconds=0,duration=0,verbose=False):
+
+        x = ['ffmpeg']
+        if start_seconds > 0:
+            #[-][HH:]MM:SS[.m...]
+            #[-]S+[.m...]
+            x.append("-accurate_seek")
+            x.append("-ss")
+            x.append("%f" % start_seconds)
+        if duration > 0:
+            x.append("-t")
+            x.append("%f" % duration)
+        x.extend(['-i', source,"-f","rawvideo", "-pix_fmt" ,mode,"-"])        
+        self.nulldev = open(os.devnull,"w") if not verbose else None
+        self.ffmpeg = subprocess.Popen(x, stdout = subprocess.PIPE, stderr=subprocess.STDERR if verbose else self.nulldev)
+        self.width = width
+        self.height = height
+        self.mode = mode
+        if self.mode == "gray":
+            self.fs = width*height
+        elif self.mode == "yuv420p":
+            self.fs = width*height*6/4
+        elif self.mode == "rgb24" or self.mode == "bgr24":
+            self.fs = width*height*3
+        self.output = self.ffmpeg.stdout
+    def read(self):
+        if self.ffmpeg.poll():
+            return False,None
+        x = self.output.read(self.fs)
+        if x == "":
+            return False,None
+        if self.mode == "gray":
+            return True,np.frombuffer(x,dtype=np.uint8).reshape((self.height,self.width))
+        elif self.mode == "yuv420p":
+            # Y fullsize
+            # U w/2 h/2
+            # V w/2 h/2
+            k = self.width*self.height
+            return True,(np.frombuffer(x[0:k],dtype=np.uint8).reshape((self.height,self.width)),
+                np.frombuffer(x[k:k+(k/4)],dtype=np.uint8).reshape((self.height/2,self.width/2)),
+                np.frombuffer(x[k+(k/4):],dtype=np.uint8).reshape((self.height/2,self.width/2))
+                    )
+        elif self.mode == "bgr24" or self.mode == "rgb24": 
+            return True,(np.frombuffer(x,dtype=np.uint8).reshape((self.height,self.width,3)))
 
 def detect(img, cascade):
-    rects = cascade.detectMultiScale(img, scaleFactor=8.0, minNeighbors=6, minSize=(48,48),
+    rects = cascade.detectMultiScale(img, scaleFactor=4.0, minNeighbors=4, minSize=(48,48),
                                      flags=cv2.CASCADE_SCALE_IMAGE)
     if len(rects) == 0:
         return []
@@ -40,47 +89,48 @@ headers = {'content-type': content_type}
 
 def push_to_cloud():
 	print ("Entered Queue")
+	previous_failed = False
 	while kill_timer:
-		print ("Queue is Empty")
-		while not q.empty():
-			temp_img = q.get()
-			print ("....ALERT ! Pulled from Queue...")
-			print ("Queue not empty " + str(q.qsize()))
+		#print ("Queue is Empty processing at " )
+		while (not q.empty()) and kill_timer:
+			if not previous_failed:
+				temp_img = q.get()
+				print ("Queue not empty " + str(q.qsize()))
 			try:
+				previous_failed = False
 				_, img_encoded = cv2.imencode('.jpg', temp_img)
 				response = requests.put("http://172.16.0.109:2777/toll/rek", data=img_encoded.tostring(), headers=headers)
 				print ("REQUESTED SUBMITTED")
 				print (response)
 			except:
+				previous_failed = True
 				print ("API Cholna..retrying in 5 seconds")
 				time.sleep(5)
-		time.sleep(5)
+		time.sleep(10)
 	print ("Exiting push_to_cloud_thread")
 	return
 		
 q = Queue.Queue()
-		
+
 def main():
 	import sys, getopt
 	print(__doc__)
 	
-	args, video_src = getopt.getopt(sys.argv[1:], '', ['cascade=', 'nested-cascade='])
-	try:
-		video_src = video_src["rtsp://admin:admin@172.16.20.20:554/snl/live/1/1"]
-	except:
-		video_src = 0
-	args = dict(args)
-	cascade_fn = args.get('--cascade', "cascade.xml")
-	cascade = cv2.CascadeClassifier(cascade_fn)
+	cascade = cv2.CascadeClassifier("car_cascade2.xml")
+	
 	while kill_timer:
 		print ("Opening Stream from rtsp")
-		cam = cv2.VideoCapture("rtsp://admin:admin@172.16.20.20:554/snl/live/1/1")
-		#i = 0
+		print (ctime())
+		cam = FFmpegVideoCapture("rtsp://admin:admin@172.16.20.20:554/snl/live/1/1",1920,1080,"bgr24")
 		do_loop = True
 		while do_loop and kill_timer:
 			try:
 				ret, img = cam.read()
-				gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+				if not ret:
+					print ("exit") 
+					break
+				#print(len(img))
+				gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 				gray = cv2.equalizeHist(gray)
 				t = clock()
 				rects = detect(gray, cascade)
@@ -89,10 +139,10 @@ def main():
 				draw_rects(vis, rects, (0, 255, 0))
 				dt = clock() - t
 				draw_str(vis, (20, 20), 'time: %.1f ms' % (dt*1000))
-				print (str(1/dt) + "fps")
+				#print (str(1/dt)  + "fps")
 				if (len(rects)) > 0 :
 					#cv2.imwrite(str(i) + 'image.jpg',img)
-					#q.put(img)
+					q.put(vis)
 					print (str(len(rects)) + "	Added to Queue")
 					#i+=1
 				#cv2.imshow('facedetect', vis)
@@ -103,25 +153,23 @@ def main():
 				#cv2.destroyAllWindows()
 				cam = None
 				print ("...	...	...	...	Error Going to Open Stream Again")
-	#cv2.destroyAllWindows()
+				time.sleep(20)
+		#cv2.destroyAllWindows()
 	print ("Out of here")
 		
 if __name__ == '__main__':
 	
+	print (ctime())
 	kill_timer = True
-	#t1 = threading.Thread(target=push_to_cloud)
+	t1 = threading.Thread(target=push_to_cloud)
 	t2 = threading.Thread(target=main)
-	#t1.start()
+	t1.start()
 	t2.start()
 	try:
 		while True:
-			time.sleep(1/1000000)
+			time.sleep(1)
 	except KeyboardInterrupt:
 		print ("attempting to close threads.")
 		kill_timer = False
         
         print ("All threads close submitted")
-
-	
-
-
